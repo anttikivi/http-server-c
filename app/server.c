@@ -85,14 +85,17 @@ int main() {
     return 1;
   }
 
+  int bytes_sent;
+
+  // TODO: Construct the response.
   if (strcmp(path, "/") == 0) {
     char *response = "HTTP/1.1 200 OK\r\n\r\n";
 
-    int bytes_sent = write(client_fd, response, strlen(response));
+    bytes_sent = write(client_fd, response, strlen(response));
   } else {
     char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
 
-    int bytes_sent = write(client_fd, response, strlen(response));
+    bytes_sent = write(client_fd, response, strlen(response));
   }
 
   close(client_fd);
