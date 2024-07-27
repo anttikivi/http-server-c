@@ -63,9 +63,37 @@ int main() {
   char buffer[1024];
   int bytes_read = read(client_fd, buffer, sizeof(buffer));
 
-  char *response = "HTTP/1.1 200 OK\r\n\r\n";
+  printf("%s", buffer);
 
-  int bytes_sent = write(client_fd, response, strlen(response));
+  char *method_end = strchr(buffer, ' ') - 1;
+  char *path_start = strchr(buffer, ' ') + 1;
+  char *path_end = strchr(path_start, ' ');
+
+  char method[method_end - buffer + 1];
+  strncpy(method, buffer, method_end - buffer + 1);
+  method[sizeof(method)] = 0;
+  printf("%s\n", method);
+
+  char path[path_end - path_start];
+  strncpy(path, path_start, path_end - path_start);
+  path[sizeof(path)] = 0;
+  printf("%s\n", path);
+
+  if (strcmp(method, "GET") != 0) {
+    // TODO: 405 Method Not Allowed
+    printf("The server doesn't support %s requests", method);
+    return 1;
+  }
+
+  if (strcmp(path, "/") == 0) {
+    char *response = "HTTP/1.1 200 OK\r\n\r\n";
+
+    int bytes_sent = write(client_fd, response, strlen(response));
+  } else {
+    char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
+
+    int bytes_sent = write(client_fd, response, strlen(response));
+  }
 
   close(client_fd);
   close(server_fd);
