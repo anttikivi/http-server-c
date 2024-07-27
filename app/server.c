@@ -8,12 +8,9 @@
 #include <unistd.h>
 
 int main() {
-  // Disable output buffering
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
 
-  // You can use print statements as follows for debugging, they'll be visible
-  // when running tests.
   printf("Logs from your program will appear here!\n");
 
   int server_fd, client_addr_len;
@@ -54,7 +51,8 @@ int main() {
   printf("Waiting for a client to connect...\n");
   client_addr_len = sizeof(client_addr);
 
-  accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+  accept(server_fd, (struct sockaddr *)&client_addr,
+         (unsigned int *)&client_addr_len);
   printf("Client connected\n");
 
   close(server_fd);
