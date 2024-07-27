@@ -58,10 +58,14 @@ int main() {
     printf("Response failed: %s \n", strerror(errno));
     return 1;
   }
-  // printf("Client connected\n");
+  printf("Client connected\n");
+
+  char buffer[1024];
+  int bytes_read = read(client_fd, buffer, sizeof(buffer));
 
   char *response = "HTTP/1.1 200 OK\r\n\r\n";
-  int bytes_sent = send(client_fd, response, strlen(response), 0);
+
+  int bytes_sent = write(client_fd, response, strlen(response));
 
   close(client_fd);
   close(server_fd);
