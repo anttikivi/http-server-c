@@ -94,20 +94,16 @@ int main() {
 
     bytes_sent = write(client_fd, response, strlen(response));
   } else if (strncmp(path, "/echo/", 6) == 0) {
-    printf("Called the echo endpoint\n");
-
     char param[strlen(path) - 6];
     strncpy(param, path + 6, strlen(path) - 6);
     param[sizeof(param)] = 0;
-    printf("Param: %s\n", param);
-    printf("Param lenght: %lu; param size: %lu\n", strlen(param),
-           sizeof(param));
 
     char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
                  "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
 
     // The lenght of the response is the lenght of the format minus the lenght
     // of the format specifiers plus their lenght.
+    // TODO: Maybe just 1024 would also work just fine.
     char response[strlen(resf) - 5 + (strlen(param) >= 10 ? 2 : 1) +
                   strlen(param)];
     sprintf(response, resf, strlen(param), param);
