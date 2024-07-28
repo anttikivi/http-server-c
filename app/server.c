@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdio.h>
@@ -6,6 +7,17 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+int num_places(int n) {
+  int r = 1;
+  if (n < 0)
+    n = (n == INT_MIN) ? INT_MAX : -n;
+  while (n > 9) {
+    n /= 10;
+    r++;
+  }
+  return r;
+}
 
 int main() {
   setbuf(stdout, NULL);
@@ -60,17 +72,17 @@ int main() {
   }
   printf("Client connected\n");
 
-  char buffer[1024];
-  int bytes_read = read(client_fd, buffer, sizeof(buffer));
+  char req[1024];
+  int bytes_read = read(client_fd, req, sizeof(req));
 
-  printf("%s", buffer);
+  printf("%s", req);
 
-  char *method_end = strchr(buffer, ' ') - 1;
-  char *path_start = strchr(buffer, ' ') + 1;
+  char *method_end = strchr(req, ' ') - 1;
+  char *path_start = strchr(req, ' ') + 1;
   char *path_end = strchr(path_start, ' ');
 
-  char method[method_end - buffer + 1];
-  strncpy(method, buffer, method_end - buffer + 1);
+  char method[method_end - req + 1];
+  strncpy(method, req, method_end - req + 1);
   // `strncpy` doesn't provide a null terminator.
   method[sizeof(method)] = 0;
   printf("%s\n", method);
@@ -104,9 +116,30 @@ int main() {
     // The lenght of the response is the lenght of the format minus the lenght
     // of the format specifiers plus their lenght.
     // TODO: Maybe just 1024 would also work just fine.
-    char response[strlen(resf) - 5 + (strlen(param) >= 10 ? 2 : 1) +
-                  strlen(param)];
+    char response[strlen(resf) - 5 + num_places(strlen(param)) + strlen(param)];
     sprintf(response, resf, strlen(param), param);
+
+    bytes_sent = write(client_fd, response, strlen(response));
+
+    // TODO: Should the endpoint accept a trailing slash?
+  } else if (strcmp(path, "/user-agent") == 0) {
+    char *headers = strstr(req, "\r\n") + 2;
+    char *ua_start = strchr(strcasestr(headers, "user-agent"), ' ') + 1;
+    char *ua_end = strstr(ua_start, "\r\n");
+
+    char user_agent[ua_end - ua_start];
+    strncpy(user_agent, ua_start, ua_end - ua_start);
+    user_agent[sizeof(user_agent)] = 0;
+
+    char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
+                 "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
+
+    // The lenght of the response is the lenght of the format minus the lenght
+    // of the format specifiers plus their lenght.
+    // TODO: Maybe just 1024 would also work just fine.
+    char response[strlen(resf) - 5 + num_places(strlen(user_agent)) +
+                  strlen(user_agent)];
+    sprintf(response, resf, strlen(user_agent), user_agent);
 
     bytes_sent = write(client_fd, response, strlen(response));
   } else {
