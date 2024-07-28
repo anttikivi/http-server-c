@@ -104,7 +104,7 @@ int main() {
            sizeof(param));
 
     char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
-                 "text/plain\r\nContent-Lenght: %lu\r\n\r\n%s";
+                 "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
 
     // The lenght of the response is the lenght of the format minus the lenght
     // of the format specifiers plus their lenght.
