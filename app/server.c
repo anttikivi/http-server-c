@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <netinet/in.h>
@@ -10,13 +11,22 @@
 
 int num_places(int n) {
   int r = 1;
-  if (n < 0)
+  if (n < 0) {
     n = (n == INT_MIN) ? INT_MAX : -n;
+  }
   while (n > 9) {
     n /= 10;
     r++;
   }
   return r;
+}
+
+int strcicmp(char const *a, char const *b) {
+  for (;; a++, b++) {
+    int d = tolower((unsigned char)*a) - tolower((unsigned char)*b);
+    if (d != 0 || !*a)
+      return d;
+  }
 }
 
 int main() {
@@ -77,20 +87,20 @@ int main() {
 
   printf("%s", req);
 
-  char *method_end = strchr(req, ' ') - 1;
-  char *path_start = strchr(req, ' ') + 1;
-  char *path_end = strchr(path_start, ' ');
+  char *method = strtok(req, " ");
+  char *path = strtok(NULL, " ");
 
-  char method[method_end - req + 1];
-  strncpy(method, req, method_end - req + 1);
-  // `strncpy` doesn't provide a null terminator.
-  method[sizeof(method)] = 0;
-  printf("%s\n", method);
+  // For these challenges, we don't need the HTTP version.
+  strtok(NULL, "\r\n");
 
-  char path[path_end - path_start];
-  strncpy(path, path_start, path_end - path_start);
-  path[sizeof(path)] = 0;
-  printf("%s\n", path);
+  char *header_token = strtok(NULL, "\r\n");
+  char headers[1024][1024];
+  unsigned int num_headers = 0;
+  while (NULL != header_token) {
+    strncpy(headers[num_headers], header_token, strlen(header_token));
+    header_token = strtok(NULL, "\r\n");
+    num_headers++;
+  }
 
   if (strcmp(method, "GET") != 0) {
     // TODO: 405 Method Not Allowed
@@ -108,7 +118,7 @@ int main() {
   } else if (strncmp(path, "/echo/", 6) == 0) {
     char param[strlen(path) - 6];
     strncpy(param, path + 6, strlen(path) - 6);
-    param[sizeof(param)] = 0;
+    param[sizeof(param)] = '\0';
 
     char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
                  "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
@@ -123,25 +133,43 @@ int main() {
 
     // TODO: Should the endpoint accept a trailing slash?
   } else if (strcmp(path, "/user-agent") == 0) {
-    char *headers = strstr(req, "\r\n") + 2;
-    char *ua_start = strchr(strcasestr(headers, "user-agent"), ' ') + 1;
-    char *ua_end = strstr(ua_start, "\r\n");
+    char header[1024];
+    char user_agent[1024];
 
-    char user_agent[ua_end - ua_start];
-    strncpy(user_agent, ua_start, ua_end - ua_start);
-    user_agent[sizeof(user_agent)] = 0;
+    for (int i = 0; i < num_headers; i++) {
+      char h[1024];
+      strncpy(h, headers[i], strlen(headers[i]));
 
-    char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
-                 "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
+      if (strcicmp(strtok(h, ":"), "user-agent") == 0) {
+        char *s = strtok(NULL, "\r\n");
+        if (s[0] == ' ') {
+          strncpy(user_agent, s + 1, strlen(s) - 1);
+          user_agent[strlen(s) - 1] = '\0';
+        } else {
+          strncpy(user_agent, s, strlen(s));
+          user_agent[strlen(s)] = '\0';
+        }
+        break;
+      }
+    }
 
-    // The lenght of the response is the lenght of the format minus the lenght
-    // of the format specifiers plus their lenght.
-    // TODO: Maybe just 1024 would also work just fine.
-    char response[strlen(resf) - 5 + num_places(strlen(user_agent)) +
-                  strlen(user_agent)];
-    sprintf(response, resf, strlen(user_agent), user_agent);
+    if (user_agent[0] == '\0') {
+      printf("No user agent found!\n");
+      // TODO: Probably should return a correct HTTP response.
+      return 1;
+    } else {
+      char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
+                   "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
 
-    bytes_sent = write(client_fd, response, strlen(response));
+      // The lenght of the response is the lenght of the format minus the lenght
+      // of the format specifiers plus their lenght.
+      // TODO: Maybe just 1024 would also work just fine.
+      char response[strlen(resf) - 5 + num_places(strlen(user_agent)) +
+                    strlen(user_agent)];
+      sprintf(response, resf, strlen(user_agent), user_agent);
+
+      bytes_sent = write(client_fd, response, strlen(response));
+    }
   } else {
     char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
 
