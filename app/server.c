@@ -3,11 +3,14 @@
 #include <limits.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+void *handle_client(void *fd);
 
 int num_places(int n) {
   int r = 1;
@@ -74,13 +77,49 @@ int main() {
 
   unsigned int client_addr_len = sizeof(client_addr);
 
-  int client_fd =
-      accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-  if (client_fd < 0) {
-    printf("Response failed: %s \n", strerror(errno));
-    return 1;
+  while (1) {
+    int *client_fd = (int *)malloc(sizeof(int));
+    *client_fd =
+        accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+
+    if (client_fd == NULL) {
+      perror("Failed to allocate the client file descriptor");
+      return 1;
+    }
+
+    if (*client_fd < 0) {
+      printf("Accept failed: %s \n", strerror(errno));
+      free(client_fd);
+      continue;
+    }
+    printf("Client connected\n");
+
+    pthread_t thread;
+    printf("Creating thread for %d\n", *client_fd);
+    if (pthread_create(&thread, NULL, handle_client, (void *)client_fd) != 0) {
+      printf("pthread_create failed: %s\n", strerror(errno));
+      close(*client_fd);
+      free(client_fd);
+      continue;
+    }
+    printf("Detaching the thread for %d\n", *client_fd);
+    pthread_detach(thread);
+    printf("The thread for %d is detached\n", *client_fd);
   }
-  printf("Client connected\n");
+
+  close(server_fd);
+
+  return 0;
+}
+
+void *handle_client(void *fd) {
+  printf("Hello from thread\n");
+
+  int client_fd = *(int *)fd;
+
+  free(fd);
+
+  printf("Started handling the client %d\n", client_fd);
 
   char req[1024];
   int bytes_read = read(client_fd, req, sizeof(req));
@@ -105,7 +144,7 @@ int main() {
   if (strcmp(method, "GET") != 0) {
     // TODO: 405 Method Not Allowed
     printf("The server doesn't support %s requests", method);
-    return 1;
+    return NULL;
   }
 
   int bytes_sent;
@@ -154,15 +193,15 @@ int main() {
     }
 
     if (user_agent[0] == '\0') {
-      printf("No user agent found!\n");
+      perror("No user agent found!");
       // TODO: Probably should return a correct HTTP response.
-      return 1;
+      return NULL;
     } else {
       char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
                    "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
 
-      // The lenght of the response is the lenght of the format minus the lenght
-      // of the format specifiers plus their lenght.
+      // The lenght of the response is the lenght of the format minus the
+      // lenght of the format specifiers plus their lenght.
       // TODO: Maybe just 1024 would also work just fine.
       char response[strlen(resf) - 5 + num_places(strlen(user_agent)) +
                     strlen(user_agent)];
@@ -177,7 +216,6 @@ int main() {
   }
 
   close(client_fd);
-  close(server_fd);
 
-  return 0;
+  return NULL;
 }
