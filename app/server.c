@@ -98,6 +98,8 @@ int main() {
 }
 
 int handle_client(int client_fd) {
+  printf("Starting to handle client %d", client_fd);
+
   char req[1024];
   int bytes_read = read(client_fd, req, sizeof(req));
 
