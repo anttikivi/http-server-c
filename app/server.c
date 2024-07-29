@@ -10,7 +10,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void *handle_client(void *fd);
+int handle_client(int client_fd);
 
 int num_places(int n) {
   int r = 1;
@@ -78,33 +78,18 @@ int main() {
   unsigned int client_addr_len = sizeof(client_addr);
 
   while (1) {
-    int *client_fd = (int *)malloc(sizeof(int));
-    *client_fd =
+    int client_fd =
         accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
 
-    if (client_fd == NULL) {
-      perror("Failed to allocate the client file descriptor");
-      return 1;
-    }
-
-    if (*client_fd < 0) {
+    if (client_fd < 0) {
       printf("Accept failed: %s \n", strerror(errno));
-      free(client_fd);
       continue;
     }
     printf("Client connected\n");
 
-    pthread_t thread;
-    printf("Creating thread for %d\n", *client_fd);
-    if (pthread_create(&thread, NULL, handle_client, (void *)client_fd) != 0) {
-      printf("pthread_create failed: %s\n", strerror(errno));
-      close(*client_fd);
-      free(client_fd);
-      continue;
-    }
-    printf("Detaching the thread for %d\n", *client_fd);
-    pthread_detach(thread);
-    printf("The thread for %d is detached\n", *client_fd);
+    handle_client(client_fd);
+
+    close(client_fd);
   }
 
   close(server_fd);
@@ -112,15 +97,7 @@ int main() {
   return 0;
 }
 
-void *handle_client(void *fd) {
-  printf("Hello from thread\n");
-
-  int client_fd = *(int *)fd;
-
-  free(fd);
-
-  printf("Started handling the client %d\n", client_fd);
-
+int handle_client(int client_fd) {
   char req[1024];
   int bytes_read = read(client_fd, req, sizeof(req));
 
@@ -144,7 +121,7 @@ void *handle_client(void *fd) {
   if (strcmp(method, "GET") != 0) {
     // TODO: 405 Method Not Allowed
     printf("The server doesn't support %s requests", method);
-    return NULL;
+    return 1;
   }
 
   int bytes_sent;
@@ -195,7 +172,7 @@ void *handle_client(void *fd) {
     if (user_agent[0] == '\0') {
       perror("No user agent found!");
       // TODO: Probably should return a correct HTTP response.
-      return NULL;
+      return 1;
     } else {
       char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
                    "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
@@ -215,7 +192,5 @@ void *handle_client(void *fd) {
     bytes_sent = write(client_fd, response, strlen(response));
   }
 
-  close(client_fd);
-
-  return NULL;
+  return 0;
 }
