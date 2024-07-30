@@ -10,7 +10,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-int handle_client(int client_fd);
+const int handle_client(int client_fd);
+
+// Builds the HTTP response with the given parameters.
+//
+// NOTE: The caller of this function must free the return value's memory after.
+char *build_response(const int status, const char *content_type,
+                     const char *body);
 
 int num_places(int n) {
   int r = 1;
@@ -30,6 +36,16 @@ int strcicmp(char const *a, char const *b) {
     if (d != 0 || !*a)
       return d;
   }
+}
+
+// Concatenates two strings.
+//
+// NOTE: The caller of this function must free the return value's memory.
+char *concat(const char *a, const char *b) {
+  const size_t len_a = strlen(a);
+  const size_t len_b = strlen(b);
+  char *s;
+  return s;
 }
 
 int main() {
@@ -97,8 +113,8 @@ int main() {
   return 0;
 }
 
-int handle_client(int client_fd) {
-  printf("Starting to handle client %d", client_fd);
+const int handle_client(int client_fd) {
+  printf("Starting to handle client %d\n", client_fd);
 
   char req[1024];
   int bytes_read = read(client_fd, req, sizeof(req));
@@ -130,23 +146,16 @@ int handle_client(int client_fd) {
 
   // TODO: Construct the response.
   if (strcmp(path, "/") == 0) {
-    char *response = "HTTP/1.1 200 OK\r\n\r\n";
-
+    // char *response = "HTTP/1.1 200 OK\r\n\r\n";
+    char *response = build_response(200, NULL, NULL);
     bytes_sent = write(client_fd, response, strlen(response));
+    free(response);
   } else if (strncmp(path, "/echo/", 6) == 0) {
     char param[strlen(path) - 6];
     strncpy(param, path + 6, strlen(path) - 6);
     param[sizeof(param)] = '\0';
 
-    char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
-                 "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
-
-    // The lenght of the response is the lenght of the format minus the lenght
-    // of the format specifiers plus their lenght.
-    // TODO: Maybe just 1024 would also work just fine.
-    char response[strlen(resf) - 5 + num_places(strlen(param)) + strlen(param)];
-    sprintf(response, resf, strlen(param), param);
-
+    char *response = build_response(200, NULL, param);
     bytes_sent = write(client_fd, response, strlen(response));
 
     // TODO: Should the endpoint accept a trailing slash?
@@ -176,16 +185,7 @@ int handle_client(int client_fd) {
       // TODO: Probably should return a correct HTTP response.
       return 1;
     } else {
-      char *resf = "HTTP/1.1 200 OK\r\nContent-Type: "
-                   "text/plain\r\nContent-Length: %lu\r\n\r\n%s";
-
-      // The lenght of the response is the lenght of the format minus the
-      // lenght of the format specifiers plus their lenght.
-      // TODO: Maybe just 1024 would also work just fine.
-      char response[strlen(resf) - 5 + num_places(strlen(user_agent)) +
-                    strlen(user_agent)];
-      sprintf(response, resf, strlen(user_agent), user_agent);
-
+      char *response = build_response(200, NULL, user_agent);
       bytes_sent = write(client_fd, response, strlen(response));
     }
   } else {
@@ -195,4 +195,78 @@ int handle_client(int client_fd) {
   }
 
   return 0;
+}
+
+char *build_response(const int status, const char *content_type,
+                     const char *body) {
+  // TODO: Check if the buffer size is enough.
+  char buf[1024];
+  // The current length of the buffer. While building the string, the length is
+  // stored without the null terminator.
+  size_t len = 0;
+
+  char version[] = "HTTP/1.1 ";
+  strcpy(buf, version);
+  len += strlen(version);
+
+  // TODO: Check if the buffer size is enough.
+  char http_status[64];
+  // TODO: Check if the buffer size is enough.
+  char status_msg[64];
+  size_t status_len = 0;
+  if (status == 200) {
+    char msg[] = "OK";
+    strcpy(status_msg, msg);
+    status_len = strlen(msg);
+  } else if (status == 400) {
+    char msg[] = "Not Found";
+    strcpy(status_msg, msg);
+    status_len = strlen(msg);
+  } else {
+    printf("Unsupported HTTP status given to the string builder: %d\n", status);
+    return NULL;
+  }
+
+  strcat(status_msg, "\r\n");
+  status_len += 2;
+  sprintf(http_status, "%d %s", status, status_msg);
+  // The HTTP status code always has three places.
+  status_len += 4;
+
+  strcat(buf, http_status);
+  len += status_len;
+
+  printf("The current buffer is %s\n", buf);
+
+  if (body == NULL) {
+    strcat(buf, "\r\n");
+    len += 2;
+  } else if (content_type == NULL) {
+    char headers_format[] =
+        "Content-Type: text/plain\r\nContent-Length: %lu\r\n\r\n";
+    size_t body_len = strlen(body);
+    char content_headers[46 + num_places(body_len) + 1];
+    sprintf(content_headers,
+            "Content-Type: text/plain\r\nContent-Length: %lu\r\n\r\n",
+            body_len);
+    strcat(buf, content_headers);
+    len += strlen(content_headers);
+    strcat(buf, body);
+    len += body_len;
+  } else {
+    printf("Unsupported Content-Type given to the string builder: %s\n",
+           content_type);
+    return NULL;
+  }
+
+  // TODO: Implement the actual content types.
+
+  printf("The current buffer is %s\n", buf);
+
+  char *response = malloc((++len) * sizeof(char));
+  strcpy(response, buf);
+
+  printf("The built response is %s\n", response);
+
+  return response;
 }
