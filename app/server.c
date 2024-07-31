@@ -26,6 +26,10 @@ struct queue {
   bool shutdown;
 };
 
+struct worker_data {
+  struct queue *client_queue;
+};
+
 int handle_client(int client_fd);
 
 // Builds the HTTP response with the given parameters.
@@ -122,7 +126,8 @@ void destroy_queue(struct queue *q) {
 void *worker_thread(void *arg) {
   printf("Started a worker thread...\n");
 
-  struct queue *q = (struct queue *)arg;
+  struct worker_data *data = (struct worker_data *)arg;
+  struct queue *q = data->client_queue;
 
   while (1) {
     int client_fd = dequeue(q);
@@ -190,10 +195,13 @@ int main(void) {
   pthread_attr_setstacksize(&attr, 8388608);
 
   struct queue *client_queue = create_queue();
+  struct worker_data data = {
+      .client_queue = client_queue,
+  };
   pthread_t thread_pool[THREAD_POOL_SIZE];
 
   for (int i = 0; i < THREAD_POOL_SIZE; i++) {
-    pthread_create(&thread_pool[i], NULL, worker_thread, client_queue);
+    pthread_create(&thread_pool[i], NULL, worker_thread, &data);
   }
 
   unsigned int client_addr_len = sizeof(client_addr);
