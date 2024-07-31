@@ -10,7 +10,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-const int handle_client(int client_fd);
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct client_data {
+  int client_fd;
+};
+
+void *handle_client(void *arg);
 
 // Builds the HTTP response with the given parameters.
 //
@@ -38,17 +44,7 @@ int strcicmp(char const *a, char const *b) {
   }
 }
 
-// Concatenates two strings.
-//
-// NOTE: The caller of this function must free the return value's memory.
-char *concat(const char *a, const char *b) {
-  const size_t len_a = strlen(a);
-  const size_t len_b = strlen(b);
-  char *s;
-  return s;
-}
-
-int main() {
+int main(void) {
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
 
@@ -103,9 +99,32 @@ int main() {
     }
     printf("Client connected\n");
 
-    handle_client(client_fd);
+    struct client_data *data = malloc(sizeof(struct client_data));
+    if (data == NULL) {
+      printf("Failed to allocate memory for client data\n");
+      close(client_fd);
+      continue;
+    }
+    data->client_fd = client_fd;
 
-    close(client_fd);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN + 0x200000);
+
+    printf("Creating a thread, the client file descriptor is %d\n",
+           data->client_fd);
+
+    pthread_t thread_id;
+    if (pthread_create(&thread_id, NULL, handle_client, data) != 0) {
+      printf("Failed to create thread: %s\n", strerror(errno));
+      close(client_fd);
+      free(data);
+      pthread_attr_destroy(&attr);
+      continue;
+    }
+
+    pthread_detach(thread_id);
+    pthread_attr_destroy(&attr);
   }
 
   close(server_fd);
@@ -113,11 +132,23 @@ int main() {
   return 0;
 }
 
-const int handle_client(int client_fd) {
+void *handle_client(void *arg) {
+  pthread_mutex_lock(&mutex);
+
+  printf("Thread started\n");
+
+  struct client_data *data = (struct client_data *)arg;
+  if (data == NULL) {
+    fprintf(stderr, "handle_client received NULL data\n");
+    return NULL;
+  }
+
+  int client_fd = data->client_fd;
+
   printf("Starting to handle client %d\n", client_fd);
 
   char req[1024];
-  int bytes_read = read(client_fd, req, sizeof(req));
+  read(client_fd, req, sizeof(req));
 
   printf("%s", req);
 
@@ -139,16 +170,14 @@ const int handle_client(int client_fd) {
   if (strcmp(method, "GET") != 0) {
     // TODO: 405 Method Not Allowed
     printf("The server doesn't support %s requests", method);
-    return 1;
+    return NULL;
   }
-
-  int bytes_sent;
 
   // TODO: Construct the response.
   if (strcmp(path, "/") == 0) {
     // char *response = "HTTP/1.1 200 OK\r\n\r\n";
     char *response = build_response(200, NULL, NULL);
-    bytes_sent = write(client_fd, response, strlen(response));
+    write(client_fd, response, strlen(response));
     free(response);
   } else if (strncmp(path, "/echo/", 6) == 0) {
     char param[strlen(path) - 6];
@@ -156,14 +185,13 @@ const int handle_client(int client_fd) {
     param[sizeof(param)] = '\0';
 
     char *response = build_response(200, NULL, param);
-    bytes_sent = write(client_fd, response, strlen(response));
+    write(client_fd, response, strlen(response));
 
     // TODO: Should the endpoint accept a trailing slash?
   } else if (strcmp(path, "/user-agent") == 0) {
-    char header[1024];
     char user_agent[1024];
 
-    for (int i = 0; i < num_headers; i++) {
+    for (unsigned int i = 0; i < num_headers; i++) {
       char h[1024];
       strncpy(h, headers[i], strlen(headers[i]));
 
@@ -183,18 +211,23 @@ const int handle_client(int client_fd) {
     if (user_agent[0] == '\0') {
       perror("No user agent found!");
       // TODO: Probably should return a correct HTTP response.
-      return 1;
+      return NULL;
     } else {
       char *response = build_response(200, NULL, user_agent);
-      bytes_sent = write(client_fd, response, strlen(response));
+      write(client_fd, response, strlen(response));
     }
   } else {
     char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
 
-    bytes_sent = write(client_fd, response, strlen(response));
+    write(client_fd, response, strlen(response));
   }
 
-  return 0;
+  close(client_fd);
+  free(data);
+
+  pthread_mutex_unlock(&mutex);
+
+  return NULL;
 }
 
 char *build_response(const int status, const char *content_type,
@@ -242,8 +275,6 @@ char *build_response(const int status, const char *content_type,
     strcat(buf, "\r\n");
     len += 2;
   } else if (content_type == NULL) {
-    char headers_format[] =
-        "Content-Type: text/plain\r\nContent-Length: %lu\r\n\r\n";
     size_t body_len = strlen(body);
     char content_headers[46 + num_places(body_len) + 1];
     sprintf(content_headers,

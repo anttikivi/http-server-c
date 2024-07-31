@@ -1,0 +1,7 @@
+-Wall
+-Wextra
+-Werror
+-Wpedantic
+-lpthread
+-std=c99
+-O2
