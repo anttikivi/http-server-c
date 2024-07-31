@@ -28,9 +28,11 @@ struct queue {
 
 struct worker_data {
   struct queue *client_queue;
+  int argc;
+  char **argv;
 };
 
-int handle_client(int client_fd);
+int handle_client(int client_fd, int argc, char **argv);
 
 // Builds the HTTP response with the given parameters.
 //
@@ -56,6 +58,14 @@ int strcicmp(char const *a, char const *b) {
     if (d != 0 || !*a)
       return d;
   }
+}
+
+int ends_with(const char *str, const char *suffix) {
+  size_t str_len = strlen(str);
+  size_t suffix_len = strlen(suffix);
+
+  return (str_len >= suffix_len) &&
+         (!memcmp(str + str_len - suffix_len, suffix, suffix_len));
 }
 
 struct queue *create_queue(void) {
@@ -138,7 +148,7 @@ void *worker_thread(void *arg) {
     }
     printf("Handling a client, the client file descriptor is %d\n", client_fd);
 
-    if (handle_client(client_fd) != 0) {
+    if (handle_client(client_fd, data->argc, data->argv) != 0) {
       printf("Failed to handle the client %d\n", client_fd);
     }
 
@@ -149,7 +159,7 @@ void *worker_thread(void *arg) {
   }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
 
@@ -197,6 +207,8 @@ int main(void) {
   struct queue *client_queue = create_queue();
   struct worker_data data = {
       .client_queue = client_queue,
+      .argc = argc,
+      .argv = argv,
   };
   pthread_t thread_pool[THREAD_POOL_SIZE];
 
@@ -233,7 +245,7 @@ int main(void) {
   return EXIT_SUCCESS;
 }
 
-int handle_client(int client_fd) {
+int handle_client(int client_fd, int argc, char **argv) {
   printf("Started to handle the client %d\n", client_fd);
 
   char req[4096] = {0};
@@ -306,6 +318,48 @@ int handle_client(int client_fd) {
     printf("Called the echo path\n");
     char *param = path + 6;
     response = build_response(200, NULL, param);
+  } else if (strncmp(path, "/files/", 7) == 0) {
+    printf("Called the files path\n");
+    if (strlen(path) <= 7) {
+      printf("No file given after the files path!\n");
+      response = build_response(404, NULL, NULL);
+    } else if (argc < 3) {
+      printf("Not enough arguments to call the files path!\n");
+      response = build_response(500, NULL, NULL);
+    } else if (strcmp(argv[1], "--directory") != 0 || strlen(argv[2]) < 1) {
+      printf("Wrong arguments to call the files path!\n");
+      response = build_response(500, NULL, NULL);
+    } else {
+      char *dir = argv[2];
+      char *filename;
+      if (ends_with(dir, "/")) {
+        filename = strcat(dir, path + 7);
+      } else {
+        filename = strcat(dir, path + 6);
+      }
+      printf("The constructed filename is %s\n", filename);
+
+      if (access(filename, F_OK) != 0) {
+        printf("The file wasn't found: %s\n", filename);
+        response = build_response(404, NULL, NULL);
+      } else {
+        FILE *fp = fopen(filename, "r");
+        if (fp == NULL) {
+          printf("Failed to open the file: %s\n", filename);
+          response = build_response(500, NULL, NULL);
+        } else {
+          fseek(fp, 0, SEEK_END);
+          uint size = ftell(fp);
+          fseek(fp, 0, SEEK_SET);
+          printf("The size of the file: %d", size);
+          char *contents = (char *)malloc(size);
+          fread(contents, size, 1, fp);
+          response = build_response(200, "application/octet-stream", contents);
+          fclose(fp);
+          free(contents);
+        }
+      }
+    }
   } else if (strcmp(path, "/user-agent") == 0) {
     char user_agent[1024] = {0};
 
@@ -386,6 +440,10 @@ char *build_response(const int status, const char *content_type,
     char msg[] = "Not Found";
     strcpy(status_msg, msg);
     status_len = strlen(msg);
+  } else if (status == 500) {
+    char msg[] = "Internal Server Error";
+    strcpy(status_msg, msg);
+    status_len = strlen(msg);
   } else {
     printf("Unsupported HTTP status given to the string builder: %d\n", status);
     return NULL;
@@ -416,12 +474,17 @@ char *build_response(const int status, const char *content_type,
     strcat(buf, body);
     len += body_len;
   } else {
-    printf("Unsupported Content-Type given to the string builder: %s\n",
-           content_type);
-    return NULL;
+    size_t body_len = strlen(body);
+    char headers_fmt[] = "Content-Type: %s\r\nContent-Length: %lu\r\n\r\n";
+    size_t headers_len =
+        strlen(headers_fmt) - 5 + strlen(content_type) + body_len + 1;
+    char content_headers[headers_len];
+    sprintf(content_headers, headers_fmt, content_type, body_len);
+    strcat(buf, content_headers);
+    len += strlen(content_headers);
+    strcat(buf, body);
+    len += body_len;
   }
-
-  // TODO: Implement the actual content types.
 
   printf("The current buffer is %s\n", buf);
 
