@@ -96,11 +96,12 @@ int main(void) {
 
     if (handle_client(client_fd) != 0) {
       printf("Failed to handle the client %d\n", client_fd);
-      close(client_fd);
-      continue;
     }
 
+    printf("Closing client connection %d\n", client_fd);
     close(client_fd);
+
+    usleep(10000);
   }
 
   close(server_fd);
@@ -111,28 +112,37 @@ int main(void) {
 int handle_client(int client_fd) {
   printf("Started to handle the client %d\n", client_fd);
 
-  char req[1024];
+  char req[4096] = {0};
   ssize_t total_bytes_read = 0;
   ssize_t bytes_read;
+
+  // Read the request
   while ((bytes_read = read(client_fd, req + total_bytes_read,
-                            sizeof(req) - total_bytes_read)) > 0) {
+                            sizeof(req) - 1 - total_bytes_read)) > 0) {
     total_bytes_read += bytes_read;
     if (strstr(req, "\r\n\r\n") != NULL) {
-      break; // Found end of headers
+      break;
     }
   }
+
   if (bytes_read < 0) {
     perror("Error reading from socket");
     return EXIT_FAILURE;
   }
-  req[total_bytes_read] = '\0';
 
-  printf("%s", req);
+  req[total_bytes_read] = '\0';
+  printf("Received request (%zd bytes):\n%s\n", total_bytes_read, req);
 
   char *method = strtok(req, " ");
   char *path = strtok(NULL, " ");
 
-  // For these challenges, we don't need the HTTP version.
+  if (method == NULL || path == NULL) {
+    printf("Invalid request format\n");
+    return EXIT_FAILURE;
+  }
+
+  printf("Method: %s, Path: %s\n", method, path);
+
   strtok(NULL, "\r\n");
 
   char *header_token = strtok(NULL, "\r\n");
@@ -144,54 +154,14 @@ int handle_client(int client_fd) {
     num_headers++;
   }
 
-  if (strcmp(method, "GET") != 0) {
-    // TODO: 405 Method Not Allowed
-    printf("The server doesn't support %s requests", method);
-    return EXIT_FAILURE;
-  }
-
-  // TODO: Construct the response.
+  char *response;
   if (strcmp(path, "/") == 0) {
-    // char *response = "HTTP/1.1 200 OK\r\n\r\n";
-    char *response = build_response(200, NULL, NULL);
-    ssize_t total_bytes_written = 0;
-    ssize_t bytes_written;
-    ssize_t response_len = strlen(response);
-    while (total_bytes_written < response_len) {
-      bytes_written = write(client_fd, response + total_bytes_written,
-                            response_len - total_bytes_written);
-      if (bytes_written <= 0) {
-        if (errno == EINTR)
-          continue;
-        perror("Error writing to socket");
-        return EXIT_FAILURE;
-      }
-      total_bytes_written += bytes_written;
-    }
-    free(response);
+    printf("Called the index path\n");
+    response = build_response(200, NULL, NULL);
   } else if (strncmp(path, "/echo/", 6) == 0) {
-    char param[strlen(path) - 6];
-    strncpy(param, path + 6, strlen(path) - 6);
-    param[sizeof(param)] = '\0';
-
-    char *response = build_response(200, NULL, param);
-    ssize_t total_bytes_written = 0;
-    ssize_t bytes_written;
-    ssize_t response_len = strlen(response);
-    while (total_bytes_written < response_len) {
-      bytes_written = write(client_fd, response + total_bytes_written,
-                            response_len - total_bytes_written);
-      if (bytes_written <= 0) {
-        if (errno == EINTR)
-          continue;
-        perror("Error writing to socket");
-        return EXIT_FAILURE;
-      }
-      total_bytes_written += bytes_written;
-    }
-    free(response);
-
-    // TODO: Should the endpoint accept a trailing slash?
+    printf("Called the echo path\n");
+    char *param = path + 6;
+    response = build_response(200, NULL, param);
   } else if (strcmp(path, "/user-agent") == 0) {
     char user_agent[1024];
 
@@ -217,40 +187,35 @@ int handle_client(int client_fd) {
       // TODO: Probably should return a correct HTTP response.
       return EXIT_FAILURE;
     } else {
-      char *response = build_response(200, NULL, user_agent);
-      ssize_t total_bytes_written = 0;
-      ssize_t bytes_written;
-      ssize_t response_len = strlen(response);
-      while (total_bytes_written < response_len) {
-        bytes_written = write(client_fd, response + total_bytes_written,
-                              response_len - total_bytes_written);
-        if (bytes_written <= 0) {
-          if (errno == EINTR)
-            continue;
-          perror("Error writing to socket");
-          return EXIT_FAILURE;
-        }
-        total_bytes_written += bytes_written;
-      }
-      free(response);
+      response = build_response(200, NULL, user_agent);
     }
   } else {
-    char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
+    response = "HTTP/1.1 404 Not Found\r\n\r\n";
+  }
 
-    ssize_t total_bytes_written = 0;
-    ssize_t bytes_written;
-    ssize_t response_len = strlen(response);
-    while (total_bytes_written < response_len) {
-      bytes_written = write(client_fd, response + total_bytes_written,
-                            response_len - total_bytes_written);
-      if (bytes_written <= 0) {
-        if (errno == EINTR)
-          continue;
-        perror("Error writing to socket");
-        return EXIT_FAILURE;
-      }
-      total_bytes_written += bytes_written;
+  printf("Sending response:\n%s\n", response);
+
+  // Send the response
+  size_t response_len = strlen(response);
+  size_t total_bytes_written = 0;
+  while (total_bytes_written < response_len) {
+    size_t bytes_written = write(client_fd, response + total_bytes_written,
+                                 response_len - total_bytes_written);
+    if (bytes_written <= 0) {
+      if (errno == EINTR)
+        continue;
+      perror("Error writing to socket");
+      return EXIT_FAILURE;
     }
+    total_bytes_written += bytes_written;
+  }
+
+  printf("Response sent (%zd bytes)\n", total_bytes_written);
+
+  // If we allocated memory for the response, free it
+  if (response != NULL &&
+      response[0] !=
+          'H') { // Crude check to see if it's not the static 404 response
     free(response);
   }
 
