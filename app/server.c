@@ -349,9 +349,9 @@ int handle_client(int client_fd, int argc, char **argv) {
           response = build_response(500, NULL, NULL);
         } else {
           fseek(fp, 0, SEEK_END);
-          uint size = ftell(fp);
+          long size = ftell(fp);
           fseek(fp, 0, SEEK_SET);
-          printf("The size of the file: %d", size);
+          printf("The size of the file: %ld", size);
           char *contents = (char *)malloc(size);
           fread(contents, size, 1, fp);
           response = build_response(200, "application/octet-stream", contents);
