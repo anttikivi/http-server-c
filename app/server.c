@@ -112,7 +112,20 @@ int handle_client(int client_fd) {
   printf("Started to handle the client %d\n", client_fd);
 
   char req[1024];
-  read(client_fd, req, sizeof(req));
+  ssize_t total_bytes_read = 0;
+  ssize_t bytes_read;
+  while ((bytes_read = read(client_fd, req + total_bytes_read,
+                            sizeof(req) - total_bytes_read)) > 0) {
+    total_bytes_read += bytes_read;
+    if (strstr(req, "\r\n\r\n") != NULL) {
+      break; // Found end of headers
+    }
+  }
+  if (bytes_read < 0) {
+    perror("Error reading from socket");
+    return EXIT_FAILURE;
+  }
+  req[total_bytes_read] = '\0';
 
   printf("%s", req);
 
@@ -141,7 +154,20 @@ int handle_client(int client_fd) {
   if (strcmp(path, "/") == 0) {
     // char *response = "HTTP/1.1 200 OK\r\n\r\n";
     char *response = build_response(200, NULL, NULL);
-    write(client_fd, response, strlen(response));
+    ssize_t total_bytes_written = 0;
+    ssize_t bytes_written;
+    ssize_t response_len = strlen(response);
+    while (total_bytes_written < response_len) {
+      bytes_written = write(client_fd, response + total_bytes_written,
+                            response_len - total_bytes_written);
+      if (bytes_written <= 0) {
+        if (errno == EINTR)
+          continue;
+        perror("Error writing to socket");
+        return EXIT_FAILURE;
+      }
+      total_bytes_written += bytes_written;
+    }
     free(response);
   } else if (strncmp(path, "/echo/", 6) == 0) {
     char param[strlen(path) - 6];
@@ -149,7 +175,21 @@ int handle_client(int client_fd) {
     param[sizeof(param)] = '\0';
 
     char *response = build_response(200, NULL, param);
-    write(client_fd, response, strlen(response));
+    ssize_t total_bytes_written = 0;
+    ssize_t bytes_written;
+    ssize_t response_len = strlen(response);
+    while (total_bytes_written < response_len) {
+      bytes_written = write(client_fd, response + total_bytes_written,
+                            response_len - total_bytes_written);
+      if (bytes_written <= 0) {
+        if (errno == EINTR)
+          continue;
+        perror("Error writing to socket");
+        return EXIT_FAILURE;
+      }
+      total_bytes_written += bytes_written;
+    }
+    free(response);
 
     // TODO: Should the endpoint accept a trailing slash?
   } else if (strcmp(path, "/user-agent") == 0) {
@@ -178,12 +218,40 @@ int handle_client(int client_fd) {
       return EXIT_FAILURE;
     } else {
       char *response = build_response(200, NULL, user_agent);
-      write(client_fd, response, strlen(response));
+      ssize_t total_bytes_written = 0;
+      ssize_t bytes_written;
+      ssize_t response_len = strlen(response);
+      while (total_bytes_written < response_len) {
+        bytes_written = write(client_fd, response + total_bytes_written,
+                              response_len - total_bytes_written);
+        if (bytes_written <= 0) {
+          if (errno == EINTR)
+            continue;
+          perror("Error writing to socket");
+          return EXIT_FAILURE;
+        }
+        total_bytes_written += bytes_written;
+      }
+      free(response);
     }
   } else {
     char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
 
-    write(client_fd, response, strlen(response));
+    ssize_t total_bytes_written = 0;
+    ssize_t bytes_written;
+    ssize_t response_len = strlen(response);
+    while (total_bytes_written < response_len) {
+      bytes_written = write(client_fd, response + total_bytes_written,
+                            response_len - total_bytes_written);
+      if (bytes_written <= 0) {
+        if (errno == EINTR)
+          continue;
+        perror("Error writing to socket");
+        return EXIT_FAILURE;
+      }
+      total_bytes_written += bytes_written;
+    }
+    free(response);
   }
 
   return EXIT_SUCCESS;
