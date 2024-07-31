@@ -3,11 +3,30 @@
 #include <limits.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#define THREAD_POOL_SIZE 10
+
+pthread_mutex_t handler_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct node {
+  int client_fd;
+  struct node *next;
+};
+
+struct queue {
+  struct node *front;
+  struct node *rear;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  bool shutdown;
+};
 
 int handle_client(int client_fd);
 
@@ -34,6 +53,96 @@ int strcicmp(char const *a, char const *b) {
     int d = tolower((unsigned char)*a) - tolower((unsigned char)*b);
     if (d != 0 || !*a)
       return d;
+  }
+}
+
+struct queue *create_queue(void) {
+  struct queue *q = malloc(sizeof(struct queue));
+  q->front = q->rear = NULL;
+  pthread_mutex_init(&q->mutex, NULL);
+  pthread_cond_init(&q->cond, NULL);
+  q->shutdown = false;
+  return q;
+}
+
+void enqueue(struct queue *q, int client_fd) {
+  struct node *new_node = malloc(sizeof(struct node));
+  new_node->client_fd = client_fd;
+  new_node->next = NULL;
+
+  pthread_mutex_lock(&q->mutex);
+  if (q->rear == NULL) {
+    q->front = q->rear = new_node;
+  } else {
+    q->rear->next = new_node;
+    q->rear = new_node;
+  }
+  pthread_cond_signal(&q->cond);
+  pthread_mutex_unlock(&q->mutex);
+}
+
+int dequeue(struct queue *q) {
+  pthread_mutex_lock(&q->mutex);
+  while (q->front == NULL && !q->shutdown) {
+    pthread_cond_wait(&q->cond, &q->mutex);
+  }
+
+  if (q->shutdown && q->front == NULL) {
+    pthread_mutex_unlock(&q->mutex);
+    return -1;
+  }
+
+  struct node *temp = q->front;
+  int client_fd = temp->client_fd;
+  q->front = q->front->next;
+  if (q->front == NULL) {
+    q->rear = NULL;
+  }
+  free(temp);
+  pthread_mutex_unlock(&q->mutex);
+  return client_fd;
+}
+
+void shutdown_queue(struct queue *q) {
+  pthread_mutex_lock(&q->mutex);
+  q->shutdown = true;
+  pthread_cond_broadcast(&q->cond);
+  pthread_mutex_unlock(&q->mutex);
+}
+
+void destroy_queue(struct queue *q) {
+  while (q->front != NULL) {
+    struct node *temp = q->front;
+    q->front = q->front->next;
+    free(temp);
+  }
+  pthread_mutex_destroy(&q->mutex);
+  pthread_cond_destroy(&q->cond);
+  free(q);
+}
+
+void *worker_thread(void *arg) {
+  printf("Started a worker thread...\n");
+
+  struct queue *q = (struct queue *)arg;
+
+  while (1) {
+    int client_fd = dequeue(q);
+
+    if (client_fd < 0) {
+      printf("Dequeuing failed: %s \n", strerror(errno));
+      continue;
+    }
+    printf("Handling a client, the client file descriptor is %d\n", client_fd);
+
+    if (handle_client(client_fd) != 0) {
+      printf("Failed to handle the client %d\n", client_fd);
+    }
+
+    printf("Closing client connection %d\n", client_fd);
+    close(client_fd);
+
+    usleep(10000);
   }
 }
 
@@ -78,45 +187,55 @@ int main(void) {
     return EXIT_FAILURE;
   }
 
-  printf("Waiting for a client to connect...\n");
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 8388608);
+
+  struct queue *client_queue = create_queue();
+  pthread_t thread_pool[THREAD_POOL_SIZE];
+
+  for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+    pthread_create(&thread_pool[i], NULL, worker_thread, client_queue);
+  }
 
   unsigned int client_addr_len = sizeof(client_addr);
 
+  unsigned int enqueue_count = 0;
   while (1) {
     int client_fd =
         accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-
-    if (client_fd < 0) {
-      printf("Accept failed: %s \n", strerror(errno));
-      continue;
+    if (client_fd >= 0) {
+      printf("Main thread enqueues a new client file descriptor: %d\n",
+             client_fd);
+      enqueue(client_queue, client_fd);
+      enqueue_count++;
     }
-    printf("Client connected\n");
-
-    printf("Handling a client, the client file descriptor is %d\n", client_fd);
-
-    if (handle_client(client_fd) != 0) {
-      printf("Failed to handle the client %d\n", client_fd);
-    }
-
-    printf("Closing client connection %d\n", client_fd);
-    close(client_fd);
-
-    usleep(10000);
+    printf("The enqueue count is now %d\n", enqueue_count);
   }
 
+  puts("Shutting down...");
+  pthread_attr_destroy(&attr);
+
+  shutdown_queue(client_queue);
+  for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+    pthread_join(thread_pool[i], NULL);
+  }
+  puts("Threads joined");
+  destroy_queue(client_queue);
   close(server_fd);
 
   return EXIT_SUCCESS;
 }
 
 int handle_client(int client_fd) {
+  pthread_mutex_lock(&handler_mutex);
+
   printf("Started to handle the client %d\n", client_fd);
 
   char req[4096] = {0};
   ssize_t total_bytes_read = 0;
   ssize_t bytes_read;
 
-  // Read the request
   while ((bytes_read = read(client_fd, req + total_bytes_read,
                             sizeof(req) - 1 - total_bytes_read)) > 0) {
     total_bytes_read += bytes_read;
@@ -146,13 +265,16 @@ int handle_client(int client_fd) {
   strtok(NULL, "\r\n");
 
   char *header_token = strtok(NULL, "\r\n");
-  char headers[1024][1024];
+  char headers[8][128];
   unsigned int num_headers = 0;
   while (NULL != header_token) {
+    printf("Found a header: %s\n", header_token);
     strncpy(headers[num_headers], header_token, strlen(header_token));
     header_token = strtok(NULL, "\r\n");
     num_headers++;
   }
+
+  printf("The total number of headers is %d\n", num_headers);
 
   char *response;
   if (strcmp(path, "/") == 0) {
@@ -190,21 +312,22 @@ int handle_client(int client_fd) {
       response = build_response(200, NULL, user_agent);
     }
   } else {
-    response = "HTTP/1.1 404 Not Found\r\n\r\n";
+    response = build_response(404, NULL, NULL);
   }
 
   printf("Sending response:\n%s\n", response);
 
-  // Send the response
   size_t response_len = strlen(response);
   size_t total_bytes_written = 0;
   while (total_bytes_written < response_len) {
     size_t bytes_written = write(client_fd, response + total_bytes_written,
                                  response_len - total_bytes_written);
     if (bytes_written <= 0) {
-      if (errno == EINTR)
+      if (errno == EINTR) {
         continue;
+      }
       perror("Error writing to socket");
+      free(response);
       return EXIT_FAILURE;
     }
     total_bytes_written += bytes_written;
@@ -212,12 +335,9 @@ int handle_client(int client_fd) {
 
   printf("Response sent (%zd bytes)\n", total_bytes_written);
 
-  // If we allocated memory for the response, free it
-  if (response != NULL &&
-      response[0] !=
-          'H') { // Crude check to see if it's not the static 404 response
-    free(response);
-  }
+  free(response);
+
+  pthread_mutex_unlock(&handler_mutex);
 
   return EXIT_SUCCESS;
 }
