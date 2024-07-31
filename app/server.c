@@ -13,8 +13,6 @@
 
 #define THREAD_POOL_SIZE 10
 
-pthread_mutex_t handler_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 struct node {
   int client_fd;
   struct node *next;
@@ -228,8 +226,6 @@ int main(void) {
 }
 
 int handle_client(int client_fd) {
-  pthread_mutex_lock(&handler_mutex);
-
   printf("Started to handle the client %d\n", client_fd);
 
   char req[4096] = {0};
@@ -252,26 +248,44 @@ int handle_client(int client_fd) {
   req[total_bytes_read] = '\0';
   printf("Received request (%zd bytes):\n%s\n", total_bytes_read, req);
 
-  char *method = strtok(req, " ");
-  char *path = strtok(NULL, " ");
-
-  if (method == NULL || path == NULL) {
+  // Parse the request line
+  char *line_start = req;
+  char *line_end = strstr(line_start, "\r\n");
+  if (line_end == NULL) {
     printf("Invalid request format\n");
     return EXIT_FAILURE;
   }
 
+  *line_end = '\0';
+  char *method = line_start;
+  char *path = strchr(method, ' ');
+  if (path == NULL) {
+    printf("Invalid request format\n");
+    return EXIT_FAILURE;
+  }
+  *path++ = '\0';
+  char *http_version = strchr(path, ' ');
+  if (http_version == NULL) {
+    printf("Invalid request format\n");
+    return EXIT_FAILURE;
+  }
+  *http_version++ = '\0';
+
   printf("Method: %s, Path: %s\n", method, path);
 
-  strtok(NULL, "\r\n");
-
-  char *header_token = strtok(NULL, "\r\n");
+  // Parse headers
+  line_start = line_end + 2; // Move past "\r\n"
   char headers[8][128];
   unsigned int num_headers = 0;
-  while (NULL != header_token) {
-    printf("Found a header: %s\n", header_token);
-    strncpy(headers[num_headers], header_token, strlen(header_token));
-    header_token = strtok(NULL, "\r\n");
+
+  while ((line_end = strstr(line_start, "\r\n")) != NULL &&
+         line_start != line_end) {
+    *line_end = '\0';
+    strncpy(headers[num_headers], line_start, sizeof(headers[num_headers]) - 1);
+    headers[num_headers][sizeof(headers[num_headers]) - 1] = '\0';
+    printf("Found a header: %s\n", headers[num_headers]);
     num_headers++;
+    line_start = line_end + 2; // Move past "\r\n"
   }
 
   printf("The total number of headers is %d\n", num_headers);
@@ -285,28 +299,27 @@ int handle_client(int client_fd) {
     char *param = path + 6;
     response = build_response(200, NULL, param);
   } else if (strcmp(path, "/user-agent") == 0) {
-    char user_agent[1024];
+    char user_agent[1024] = {0};
 
     for (unsigned int i = 0; i < num_headers; i++) {
-      char h[1024];
-      strncpy(h, headers[i], strlen(headers[i]));
+      char *header_name = headers[i];
+      char *header_value = strchr(header_name, ':');
+      if (header_value == NULL) {
+        continue;
+      }
+      *header_value++ = '\0';
+      while (*header_value == ' ')
+        header_value++; // Skip spaces
 
-      if (strcicmp(strtok(h, ":"), "user-agent") == 0) {
-        char *s = strtok(NULL, "\r\n");
-        if (s[0] == ' ') {
-          strncpy(user_agent, s + 1, strlen(s) - 1);
-          user_agent[strlen(s) - 1] = '\0';
-        } else {
-          strncpy(user_agent, s, strlen(s));
-          user_agent[strlen(s)] = '\0';
-        }
+      if (strcasecmp(header_name, "user-agent") == 0) {
+        strncpy(user_agent, header_value, sizeof(user_agent) - 1);
+        user_agent[sizeof(user_agent) - 1] = '\0';
         break;
       }
     }
 
     if (user_agent[0] == '\0') {
       perror("No user agent found!");
-      // TODO: Probably should return a correct HTTP response.
       return EXIT_FAILURE;
     } else {
       response = build_response(200, NULL, user_agent);
@@ -337,8 +350,6 @@ int handle_client(int client_fd) {
 
   free(response);
 
-  pthread_mutex_unlock(&handler_mutex);
-
   return EXIT_SUCCESS;
 }
 
@@ -363,7 +374,7 @@ char *build_response(const int status, const char *content_type,
     char msg[] = "OK";
     strcpy(status_msg, msg);
     status_len = strlen(msg);
-  } else if (status == 400) {
+  } else if (status == 404) {
     char msg[] = "Not Found";
     strcpy(status_msg, msg);
     status_len = strlen(msg);
