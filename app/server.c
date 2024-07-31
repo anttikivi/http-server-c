@@ -3,20 +3,13 @@
 #include <limits.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-struct client_data {
-  int client_fd;
-};
-
-void *handle_client(void *arg);
+int handle_client(int client_fd);
 
 // Builds the HTTP response with the given parameters.
 //
@@ -56,7 +49,7 @@ int main(void) {
   server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == -1) {
     printf("Socket creation failed: %s...\n", strerror(errno));
-    return 1;
+    return EXIT_FAILURE;
   }
 
   // Since the tester restarts your program quite often, setting SO_REUSEADDR
@@ -65,7 +58,7 @@ int main(void) {
   if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) <
       0) {
     printf("SO_REUSEADDR failed: %s \n", strerror(errno));
-    return 1;
+    return EXIT_FAILURE;
   }
 
   struct sockaddr_in serv_addr = {
@@ -76,13 +69,13 @@ int main(void) {
 
   if (bind(server_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) != 0) {
     printf("Bind failed: %s \n", strerror(errno));
-    return 1;
+    return EXIT_FAILURE;
   }
 
-  int connection_backlog = 10;
+  int connection_backlog = 200;
   if (listen(server_fd, connection_backlog) != 0) {
     printf("Listen failed: %s \n", strerror(errno));
-    return 1;
+    return EXIT_FAILURE;
   }
 
   printf("Waiting for a client to connect...\n");
@@ -99,53 +92,24 @@ int main(void) {
     }
     printf("Client connected\n");
 
-    struct client_data *data = malloc(sizeof(struct client_data));
-    if (data == NULL) {
-      printf("Failed to allocate memory for client data\n");
+    printf("Handling a client, the client file descriptor is %d\n", client_fd);
+
+    if (handle_client(client_fd) != 0) {
+      printf("Failed to handle the client %d\n", client_fd);
       close(client_fd);
       continue;
     }
-    data->client_fd = client_fd;
 
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN + 0x200000);
-
-    printf("Creating a thread, the client file descriptor is %d\n",
-           data->client_fd);
-
-    pthread_t thread_id;
-    if (pthread_create(&thread_id, NULL, handle_client, data) != 0) {
-      printf("Failed to create thread: %s\n", strerror(errno));
-      close(client_fd);
-      free(data);
-      pthread_attr_destroy(&attr);
-      continue;
-    }
-
-    pthread_detach(thread_id);
-    pthread_attr_destroy(&attr);
+    close(client_fd);
   }
 
   close(server_fd);
 
-  return 0;
+  return EXIT_SUCCESS;
 }
 
-void *handle_client(void *arg) {
-  pthread_mutex_lock(&mutex);
-
-  printf("Thread started\n");
-
-  struct client_data *data = (struct client_data *)arg;
-  if (data == NULL) {
-    fprintf(stderr, "handle_client received NULL data\n");
-    return NULL;
-  }
-
-  int client_fd = data->client_fd;
-
-  printf("Starting to handle client %d\n", client_fd);
+int handle_client(int client_fd) {
+  printf("Started to handle the client %d\n", client_fd);
 
   char req[1024];
   read(client_fd, req, sizeof(req));
@@ -170,7 +134,7 @@ void *handle_client(void *arg) {
   if (strcmp(method, "GET") != 0) {
     // TODO: 405 Method Not Allowed
     printf("The server doesn't support %s requests", method);
-    return NULL;
+    return EXIT_FAILURE;
   }
 
   // TODO: Construct the response.
@@ -211,7 +175,7 @@ void *handle_client(void *arg) {
     if (user_agent[0] == '\0') {
       perror("No user agent found!");
       // TODO: Probably should return a correct HTTP response.
-      return NULL;
+      return EXIT_FAILURE;
     } else {
       char *response = build_response(200, NULL, user_agent);
       write(client_fd, response, strlen(response));
@@ -222,12 +186,7 @@ void *handle_client(void *arg) {
     write(client_fd, response, strlen(response));
   }
 
-  close(client_fd);
-  free(data);
-
-  pthread_mutex_unlock(&mutex);
-
-  return NULL;
+  return EXIT_SUCCESS;
 }
 
 char *build_response(const int status, const char *content_type,
